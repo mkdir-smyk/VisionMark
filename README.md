@@ -17,7 +17,23 @@ It combines traditional parsing for text-based documents with Vision Language Mo
 - ☁️ **Hugging Face Spaces Ready** – Designed for easy deployment on CPU-only Hugging Face Spaces using remote inference.
 
 ---
+<table align="center">
+<tr>
+<td align="center">
+<img src="https://github.com/user-attachments/assets/1fbcf99d-2f8a-4962-9e1b-61fbc13777aa" width="100%" alt="CLI"/>
+<br>
+<b>docx file</b>
+</td>
 
+<td align="center">
+<img src="https://github.com/user-attachments/assets/23de2d9c-0e03-4216-9ed0-d6e2c94e5945" width="100%" alt="Gradio"/>
+<br>
+<b>ipynb file</b>
+</td>
+</tr>
+</table>
+
+---
 ## Supported Formats
 
 | Category | Formats |
