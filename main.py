@@ -5,7 +5,8 @@ from processors.base import BaseDocumentProcessor, DocumentType
 from processors.vision.vision_processor import VisionDocumentProcessor
 
 def process_file(file_path, output_dir, force_vision=False, max_concurrent=2, images_per_batch=1, 
-               temperature=0.0, max_tokens=None, dynamic_batching=True, max_tokens_per_batch=4000):
+               temperature=0.0, max_tokens=None, dynamic_batching=True, max_tokens_per_batch=4000,
+               api_key=None, base_url=None, model=None):
     """Process a single file"""
     try:
         print(f"Processing: {file_path}")
@@ -16,10 +17,22 @@ def process_file(file_path, output_dir, force_vision=False, max_concurrent=2, im
         # Select appropriate processor based on type and options
         if force_vision and doc_type == DocumentType.PDF:
             print(f"Using Vision processor for PDF: {file_path}")
-            processor = VisionDocumentProcessor(temperature=temperature, max_tokens=max_tokens)
+            processor = VisionDocumentProcessor(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                temperature=temperature, 
+                max_tokens=max_tokens
+            )
         elif doc_type == DocumentType.IMAGE:
             print(f"Using Vision processor for image: {file_path}")
-            processor = VisionDocumentProcessor(temperature=temperature, max_tokens=max_tokens)
+            processor = VisionDocumentProcessor(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                temperature=temperature, 
+                max_tokens=max_tokens
+            )
         else:
             # Use standard document detection
             processor = BaseDocumentProcessor.get_processor(file_path)
@@ -54,13 +67,15 @@ def process_file(file_path, output_dir, force_vision=False, max_concurrent=2, im
         traceback.print_exc()
 
 def process_directory(input_dir, output_dir, force_vision=False, max_concurrent=2, images_per_batch=1,
-                    temperature=0.0, max_tokens=None, dynamic_batching=True, max_tokens_per_batch=4000):
+                    temperature=0.0, max_tokens=None, dynamic_batching=True, max_tokens_per_batch=4000,
+                    api_key=None, base_url=None, model=None):
     """Process all files in directory"""
     for root, _, files in os.walk(input_dir):
         for file in files:
             file_path = os.path.join(root, file)
             process_file(file_path, output_dir, force_vision, max_concurrent, images_per_batch,
-                        temperature, max_tokens, dynamic_batching, max_tokens_per_batch)
+                        temperature, max_tokens, dynamic_batching, max_tokens_per_batch,
+                        api_key, base_url, model)
 
 def main():
     parser = argparse.ArgumentParser(description="Convert documents to structured markdown")
@@ -103,15 +118,6 @@ def main():
         parser.print_help()
         return
     
-    # Set API configuration if provided
-    if args.api_key:
-        from processors.vision.vision_processor import VisionDocumentProcessor
-        VisionDocumentProcessor.configure_api(
-            api_key=args.api_key,
-            base_url=args.base_url,
-            model=args.model
-        )
-    
     # Ensure output directory exists
     os.makedirs(args.output, exist_ok=True)
     
@@ -119,13 +125,15 @@ def main():
         # Process directory
         process_directory(
             args.input, args.output, args.force_vision, args.max_concurrent, args.images_per_batch,
-            args.temperature, args.max_tokens, args.dynamic_batching, args.max_tokens_per_batch
+            args.temperature, args.max_tokens, args.dynamic_batching, args.max_tokens_per_batch,
+            args.api_key, args.base_url, args.model
         )
     else:
         # Process single file
         process_file(
             args.input, args.output, args.force_vision, args.max_concurrent, args.images_per_batch,
-            args.temperature, args.max_tokens, args.dynamic_batching, args.max_tokens_per_batch
+            args.temperature, args.max_tokens, args.dynamic_batching, args.max_tokens_per_batch,
+            args.api_key, args.base_url, args.model
         )
 
 if __name__ == "__main__":

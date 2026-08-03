@@ -4,30 +4,37 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 from pathlib import Path
 from io import BytesIO
 
-import torch
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
 from PIL import Image
+from openai import OpenAI
 
 from processors.base import BaseDocumentProcessor, StructuredDocument, DocumentSection, DocumentElement, DocumentType
 
 class VisionDocumentProcessor(BaseDocumentProcessor):
-    """Document processor using Qwen2.5-VL-3B-Instruct via official Transformers implementation"""
+    """Document processor using Qwen2.5-VL via OpenAI-compatible API"""
     
-    # Configurable local path or HF model ID
-    MODEL_PATH = "Qwen/Qwen2.5-VL-3B-Instruct"
-    
-    # Class-level cache for the loaded model and processor to avoid reloading
-    _model_instance = None
-    _processor_instance = None
+    # Configurable remote model and API settings
+    MODEL_PATH = "Qwen/Qwen2.5-VL-32B-Instruct:featherless-ai"
+    BASE_URL = "https://router.huggingface.co/v1"
+    API_KEY = None
     
     @classmethod
-    def configure_api(cls, api_key: str, base_url: Optional[str] = None, model: Optional[str] = None):
+    def configure_api(
+        cls,
+        api_key=None,
+        base_url=None,
+        model=None,
+    ):
         """
-        No-op for backward compatibility. 
-        API configuration is no longer needed as we use local Hugging Face models.
+        Configure class-level API settings for the remote vision model.
         """
-        pass
+        if api_key:
+            cls.API_KEY = api_key
+            
+        if base_url:
+            cls.BASE_URL = base_url
+            
+        if model:
+            cls.MODEL_PATH = model
     
     def __init__(
         self, 
@@ -38,12 +45,12 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
         max_tokens: Optional[int] = None
     ):
         """
-        Initialize local vision document processor with Hugging Face Transformers
+        Initialize remote vision document processor with OpenAI SDK
         
         Args:
-            api_key: Ignored (kept for compatibility)
-            base_url: Ignored (kept for compatibility)
-            model: Local path or HF ID for the Qwen2.5-VL model
+            api_key: API key for the remote service
+            base_url: Base URL for the OpenAI compatible endpoint
+            model: Remote model identifier
             temperature: Temperature for generation (0.0-1.0).
             max_tokens: Maximum tokens to generate.
         """
@@ -52,30 +59,21 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
         self.temperature = float(temperature) if temperature is not None else 0.0
         self.max_tokens = int(max_tokens) if max_tokens is not None else 4000
         
-        model_path = model or self.MODEL_PATH
-            
-        # Initialize the model and processor once and cache them at the class level
-        if VisionDocumentProcessor._model_instance is None:
-            print(f"Loading Qwen2.5-VL model from {model_path}...")
-            # Use device_map="auto" and torch_dtype="auto" for optimal automatic device placement
-            VisionDocumentProcessor._model_instance = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype="auto",
-                device_map="auto"
-            )
-            
-            print(f"Loading AutoProcessor from {model_path}...")
-            VisionDocumentProcessor._processor_instance = AutoProcessor.from_pretrained(model_path)
-            
-            print("Model and processor loaded successfully.")
-            
-        self.model = VisionDocumentProcessor._model_instance
-        self.processor = VisionDocumentProcessor._processor_instance
+        self.model = model or self.MODEL_PATH
+        api_key = (
+            api_key
+            or self.API_KEY
+            or os.getenv("HF_TOKEN")
+        )
+        self.client = OpenAI(
+            base_url=base_url or self.BASE_URL,
+            api_key=api_key,
+        )
             
     def process(self, file_path: str, max_concurrent: int = 2, images_per_batch: int = 1, 
                 dynamic_batching: bool = True, max_tokens_per_batch: int = 4000) -> StructuredDocument:
         """
-        Process document using local vision model
+        Process document using remote vision model
         
         Args:
             file_path: Path to document file
@@ -146,11 +144,6 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
     def _process_pdf(self, file_path: str, document: StructuredDocument, max_concurrent: int = 2) -> None:
         """
         Process PDF document with parallel page processing
-        
-        Args:
-            file_path: Path to PDF file
-            document: Document to add content to
-            max_concurrent: Maximum number of concurrent API calls
         """
         from pdf2image import convert_from_path
         import tempfile
@@ -242,14 +235,6 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
                            dynamic_batching: bool = True, max_tokens_per_batch: int = 4000) -> None:
         """
         Process PDF document with multi-image batches for improved context
-        
-        Args:
-            file_path: Path to PDF file
-            document: Document to add content to
-            max_concurrent: Maximum number of concurrent API calls
-            images_per_batch: Number of consecutive pages to process in a single API call
-            dynamic_batching: Whether to dynamically determine batch sizes based on image complexity
-            max_tokens_per_batch: Maximum tokens per batch when using dynamic batching
         """
         from pdf2image import convert_from_path
         import tempfile
@@ -364,14 +349,6 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
     def _process_single_page(self, temp_dir: str, page_index: int, image_path: str) -> tuple:
         """
         Process a single page in the PDF
-        
-        Args:
-            temp_dir: Temporary directory 
-            page_index: Index of the page (0-based)
-            image_path: Path to the image file
-            
-        Returns:
-            tuple: (section, markdown) for the page
         """
         print(f"Started processing page {page_index+1}")
         page_num = page_index + 1  # Convert to 1-based page numbers for display
@@ -395,7 +372,7 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
         
     def _call_api(self, image_content: str) -> str:
         """
-        Run local vision model inference using official Transformers implementation
+        Run remote vision model inference using OpenAI compatible API
         
         Args:
             image_content: Base64 encoded image
@@ -417,77 +394,46 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
             "- do not explain your reasoning"
         )
         
-        print("Running official Hugging Face model inference...")
+        print("Running remote model inference...")
         try:
             data_uri = f"data:image/jpeg;base64,{image_content}"
             
-            # Build messages exactly like the official Qwen documentation
             messages = [
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "image",
-                            "image": data_uri
-                        },
-                        {
                             "type": "text",
                             "text": prompt_text
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_uri
+                            }
                         }
                     ]
                 }
             ]
             
-            # Prepare inputs using the official template layout
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            image_inputs, video_inputs = process_vision_info(messages)
-            
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
             )
             
-            # Move inputs to the correct device
-            inputs = inputs.to(self.model.device)
-            
-            # Setup generation kwargs
-            gen_kwargs = {"max_new_tokens": self.max_tokens}
-            if self.temperature > 0.0:
-                gen_kwargs["temperature"] = self.temperature
-                gen_kwargs["do_sample"] = True
-            else:
-                gen_kwargs["do_sample"] = False
-                
-            # Execute generation
-            generated_ids = self.model.generate(**inputs, **gen_kwargs)
-            
-            # Remove input tokens from generated output
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            
-            # Decode the generated output
-            output_text = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-            )
-            
-            markdown_response = output_text[0]
+            markdown_response = response.choices[0].message.content
             print("\nMarkdown response generated successfully")
             return markdown_response
             
         except Exception as e:
-            print(f"Error during local inference: {str(e)}")
+            print(f"Error during remote inference: {str(e)}")
             return f"# Model Error\n\nFailed to process document: {str(e)}"
 
     def _call_api_multi_image(self, image_contents: list, page_numbers: list) -> str:
         """
-        Run local vision model inference with multiple images 
-        using the official Qwen multi-image format.
+        Run remote vision model inference with multiple images 
         
         Args:
             image_contents: List of base64 encoded images
@@ -496,20 +442,19 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
         Returns:
             str: Markdown representation of the document across multiple pages
         """
-        print(f"Processing {len(image_contents)} images locally via Transformers")
+        print(f"Processing {len(image_contents)} images remotely")
         
         try:
-            content_list = []
+            content = []
             
-            # Add all images sequentially
-            for img_content in image_contents:
-                data_uri = f"data:image/jpeg;base64,{img_content}"
-                content_list.append({
-                    "type": "image",
-                    "image": data_uri
+            for img in image_contents:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{img}"
+                    }
                 })
                 
-            # Construct multi-page aware prompt
             prompt_text = (
                 f"These are consecutive pages from a document (pages {', '.join(map(str, page_numbers))}). "
                 "Convert this document into clean Markdown.\n"
@@ -525,54 +470,24 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
                 "- do not explain your reasoning"
             )
             
-            content_list.append({
+            content.append({
                 "type": "text",
                 "text": prompt_text
             })
             
-            # Build messages
-            messages = [
-                {
-                    "role": "user",
-                    "content": content_list
-                }
-            ]
-            
-            # Prepare and tokenize inputs
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            image_inputs, video_inputs = process_vision_info(messages)
-            
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
-            )
-            inputs = inputs.to(self.model.device)
-            
-            gen_kwargs = {"max_new_tokens": self.max_tokens}
-            if self.temperature > 0.0:
-                gen_kwargs["temperature"] = self.temperature
-                gen_kwargs["do_sample"] = True
-            else:
-                gen_kwargs["do_sample"] = False
-                
-            # Execute generation
-            generated_ids = self.model.generate(**inputs, **gen_kwargs)
-            
-            # Remove input tokens from generated output
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            
-            output_text = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": content
+                    }
+                ],
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
             )
             
-            return output_text[0]
+            return response.choices[0].message.content
             
         except Exception as e:
             print(f"Multi-image inference failed ({str(e)}). Falling back to sequential processing.")
@@ -589,14 +504,6 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
     def _process_multi_page_batch(self, temp_dir: str, page_indices: list, image_paths: list) -> list:
         """
         Process multiple pages in a single API call
-        
-        Args:
-            temp_dir: Temporary directory
-            page_indices: List of page indices (0-based)
-            image_paths: List of paths to image files
-            
-        Returns:
-            list: List of (section, markdown) tuples for each page
         """
         page_numbers = [idx+1 for idx in page_indices]  # Convert to 1-based page numbers
         print(f"Processing batch with pages: {page_numbers}")
@@ -723,12 +630,6 @@ class VisionDocumentProcessor(BaseDocumentProcessor):
     def _remove_page_markers(self, content: str) -> str:
         """
         Remove page marker headings from the markdown content
-        
-        Args:
-            content: Markdown content with page markers
-            
-        Returns:
-            str: Cleaned markdown without page markers
         """
         if not content:
             return content
